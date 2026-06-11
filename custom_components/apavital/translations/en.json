@@ -1,0 +1,56 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Apavital — sign in",
+        "description": "Enter your My Apavital credentials. You'll then receive a one-time code by SMS or e-mail to confirm.",
+        "data": {
+          "email": "E-mail",
+          "password": "Password"
+        }
+      },
+      "method": {
+        "title": "Where should we send the code?",
+        "description": "Choose how to receive your one-time login code.",
+        "data": {
+          "method": "Send code via"
+        }
+      },
+      "otp": {
+        "title": "Enter the code",
+        "description": "Enter the one-time code you just received.",
+        "data": {
+          "code": "One-time code"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Apavital — sign in again",
+        "description": "Your Apavital login expired. Enter your credentials again; you'll confirm with a one-time code.",
+        "data": {
+          "email": "E-mail",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Incorrect e-mail or password.",
+      "invalid_code": "That one-time code was incorrect or expired. Try again.",
+      "cannot_connect": "Could not reach Apavital. Check your connection and try again.",
+      "unknown": "Something went wrong. Please try again."
+    },
+    "abort": {
+      "already_configured": "This Apavital account is already configured.",
+      "reauth_successful": "Re-authentication was successful.",
+      "unique_id_mismatch": "Please sign in with the same Apavital account you configured originally."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "meter_index": { "name": "Water meter index" },
+      "last_reading": { "name": "Last official reading" },
+      "last_reading_date": { "name": "Last reading date" },
+      "balance": { "name": "Balance" },
+      "unpaid_invoices": { "name": "Unpaid invoices" }
+    }
+  }
+}
