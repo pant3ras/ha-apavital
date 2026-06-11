@@ -91,6 +91,7 @@ async def async_setup_entry(
         entities.append(ApavitalMeterIndexSensor(coordinator, code))
         entities.append(ApavitalLastReadingSensor(coordinator, code))
         entities.append(ApavitalLastReadingDateSensor(coordinator, code))
+        entities.append(ApavitalMonthlyConsumptionSensor(coordinator, code))
 
     entities.append(ApavitalBalanceSensor(coordinator, entry.entry_id))
     entities.append(ApavitalUnpaidSensor(coordinator, entry.entry_id))
@@ -137,6 +138,8 @@ class _PlaceBase(CoordinatorEntity[ApavitalDataCoordinator], SensorEntity):
         usage = self._place().get("usage") or []
         best, best_dt = {}, None
         for row in usage:
+            if not isinstance(row, dict):
+                continue
             dt = _ro_datetime(row.get("TIME"))
             if dt is not None and (best_dt is None or dt > best_dt):
                 best, best_dt = row, dt
@@ -146,9 +149,24 @@ class _PlaceBase(CoordinatorEntity[ApavitalDataCoordinator], SensorEntity):
         readings = self._place().get("readings") or []
         best, best_dt = {}, None
         for row in readings:
+            if not isinstance(row, dict):
+                continue
             d = _ro_date(row.get("DATA"))
             if d is not None and (best_dt is None or d > best_dt):
                 best, best_dt = row, d
+        return best
+
+    def _latest_monthly(self) -> dict[str, Any]:
+        best, best_key = {}, None
+        for row in self._place().get("monthly") or []:
+            if not isinstance(row, dict):
+                continue
+            try:
+                key = (int(row.get("AN")), int(row.get("LUNA")))
+            except (TypeError, ValueError):
+                continue
+            if best_key is None or key > best_key:
+                best, best_key = row, key
         return best
 
 
@@ -225,6 +243,29 @@ class ApavitalLastReadingDateSensor(_PlaceBase):
     @property
     def native_value(self) -> date | None:
         return _ro_date(self._latest_reading().get("DATA"))
+
+
+class ApavitalMonthlyConsumptionSensor(_PlaceBase):
+    """Most recent month's billed water consumption (m³)."""
+
+    _attr_translation_key = "monthly_consumption"
+    _attr_device_class = SensorDeviceClass.WATER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
+    _attr_icon = "mdi:water-pump"
+
+    def __init__(self, coordinator: ApavitalDataCoordinator, code: str) -> None:
+        super().__init__(coordinator, code)
+        self._attr_unique_id = f"{code}_monthly_consumption"
+
+    @property
+    def native_value(self) -> float | None:
+        return _to_float(self._latest_monthly().get("CONSUM"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        m = self._latest_monthly()
+        return {"month": m.get("LUNA"), "year": m.get("AN")}
 
 
 class _AccountBase(CoordinatorEntity[ApavitalDataCoordinator], SensorEntity):

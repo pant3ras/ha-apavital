@@ -7,7 +7,8 @@ One poll assembles, for every consumption place on the account:
         <client_code>: {
           "info": {...},        # entry from locuriCons
           "usage": [...],       # smart-meter index/consumption (get_usage)
-          "readings": [...],    # official readings for this place (index_history)
+          "readings": [...],    # official readings (index_history_last_year)
+          "monthly":  [...],    # monthly consumption (index_history)
         }
       },
       "balance": <raw sold response>,
@@ -50,21 +51,54 @@ class ApavitalDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(str(err)) from err
 
     async def _fetch_all(self) -> dict[str, Any]:
-        places_raw = await self.client.async_get_locuri()
-        readings_all = await self.client.async_get_index_history()
+        places_raw = _as_list(await self.client.async_get_locuri())
+        readings_all = _as_list(await self.client.async_get_readings())
+        monthly_all = _as_list(await self.client.async_get_monthly())
         balance = await self.client.async_get_sold()
-        unpaid = await self.client.async_get_unpaid()
+        unpaid = _as_list(await self.client.async_get_unpaid())
 
         places: dict[str, Any] = {}
         for place in places_raw:
+            if not isinstance(place, dict):
+                continue
             code = str(place.get("GRUPMAS_COD") or place.get("ID") or "")
             if not code:
                 continue
             contrfurn = str(place.get("CONTRFURN_ID") or "")
             readings = [
-                r for r in readings_all if str(r.get("CONTRFURN_ID") or "") == contrfurn
+                r
+                for r in readings_all
+                if isinstance(r, dict) and str(r.get("CONTRFURN_ID") or "") == contrfurn
             ]
-            usage = await self.client.async_get_usage(code)
-            places[code] = {"info": place, "usage": usage, "readings": readings}
+            monthly = [
+                m
+                for m in monthly_all
+                if isinstance(m, dict) and str(m.get("CONTRFURN_ID") or "") == contrfurn
+            ]
+            usage = _as_list(await self.client.async_get_usage(code))
+            places[code] = {
+                "info": place,
+                "usage": usage,
+                "readings": readings,
+                "monthly": monthly,
+            }
 
         return {"places": places, "balance": balance, "unpaid": unpaid}
+
+
+def _as_list(value: Any) -> list[Any]:
+    """Coerce an API response into a list.
+
+    Apavital endpoints usually return a bare JSON array, but depending on account
+    state some wrap it in an object (e.g. ``{"data": [...]}``) or return a scalar.
+    Normalising here keeps the rest of the coordinator simple and crash-free.
+    """
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        for key in ("data", "result", "results", "items", "rows", "list"):
+            inner = value.get(key)
+            if isinstance(inner, list):
+                return inner
+        _LOGGER.debug("Expected a list but got dict with keys %s", list(value))
+    return []

@@ -105,8 +105,13 @@ class ApavitalApiClient:
     async def async_get_unpaid(self) -> list[dict[str, Any]]:
         return await self._post_json("facturi_unpaid", _ctx("/evidenta_facturi", "Facturi")) or []
 
-    async def async_get_index_history(self) -> list[dict[str, Any]]:
-        return await self._get("index_history", "/istoric_citiri", "Istoric Citiri") or []
+    async def async_get_readings(self) -> Any:
+        """Official meter readings (DATA / INDEX_CITIT) across all meters."""
+        return await self._get("index_history_last_year", "/istoric_citiri", "Istoric Citiri")
+
+    async def async_get_monthly(self) -> Any:
+        """Monthly consumption per meter (wrapped as {"data": [...]})."""
+        return await self._get("index_history", "/istoric_citiri", "Istoric Citiri")
 
     async def async_get_usage(self, client_code: str) -> list[dict[str, Any]]:
         data = await self._post_form("get_usage", {"clientCode": client_code, "ctrAdmin": "false"})

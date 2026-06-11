@@ -1,4 +1,4 @@
-![Apavital](https://raw.githubusercontent.com/pant3ras/ha-apavital/main/logo.webp)
+![Apavital](https://raw.githubusercontent.com/pant3ras/ha-apavital/main/icon.png)
 
 # Apavital for Home Assistant
 
@@ -18,6 +18,7 @@ balance, and unpaid invoices — for every consumption place on your account.
   the latest official reading.
 - **Last official reading** (m³) — with date, reading type, and meter serial.
 - **Last reading date**.
+- **Last month consumption** (m³) — most recent billed monthly volume.
 
 **Account** (one device):
 - **Balance** (RON).

@@ -49,6 +49,7 @@
       "meter_index": { "name": "Water meter index" },
       "last_reading": { "name": "Last official reading" },
       "last_reading_date": { "name": "Last reading date" },
+      "monthly_consumption": { "name": "Last month consumption" },
       "balance": { "name": "Balance" },
       "unpaid_invoices": { "name": "Unpaid invoices" }
     }
