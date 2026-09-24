@@ -28,6 +28,9 @@ CURRENCY_RON = "RON"
 # Candidate keys for pulling a number out of loosely-typed responses.
 _BALANCE_KEYS = ("sold", "SOLD", "value", "result", "suma", "sumaTotala", "total", "amount", "debit", "balance")
 _INVOICE_VALUE_KEYS = ("VALOARE", "valoare", "REST_PLATA", "rest", "suma", "SUMA", "total", "TOTAL")
+# Invoice history rows: the face value, never what is left to pay.
+_ISSUED_VALUE_KEYS = ("VALOARE", "valoare", "SOLD_INIT", "TOTAL", "total")
+_PAID_VALUE_KEYS = ("TOTAL", "total", "SUMA", "suma", "VALOARE", "valoare")
 
 
 def _to_float(value: Any) -> float | None:
@@ -51,6 +54,27 @@ def _ro_date(value: Any) -> date | None:
         return datetime.strptime(value.strip()[:10], "%d.%m.%Y").date()
     except ValueError:
         return None
+
+
+def _any_date(value: Any) -> date | None:
+    """Dates from the history endpoints: dd.mm.yyyy, with or without a time part."""
+    if not value or not isinstance(value, str):
+        return None
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(value.strip()[:10], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _monthly_totals(rows: list[dict[str, Any]]) -> dict[str, float]:
+    """Sum rows shaped {"date": "YYYY-MM-DD", "amount": x} per calendar month."""
+    totals: dict[str, float] = {}
+    for row in rows:
+        key = row["date"][:7]
+        totals[key] = round(totals.get(key, 0.0) + row["amount"], 2)
+    return dict(sorted(totals.items()))
 
 
 def _ro_datetime(value: Any) -> datetime | None:
@@ -95,6 +119,8 @@ async def async_setup_entry(
 
     entities.append(ApavitalBalanceSensor(coordinator, entry.entry_id))
     entities.append(ApavitalUnpaidSensor(coordinator, entry.entry_id))
+    entities.append(ApavitalInvoicesSensor(coordinator, entry.entry_id))
+    entities.append(ApavitalPaymentsSensor(coordinator, entry.entry_id))
 
     async_add_entities(entities)
 
@@ -222,10 +248,21 @@ class ApavitalLastReadingSensor(_PlaceBase):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         r = self._latest_reading()
+        history = []
+        for row in self._place().get("readings") or []:
+            if not isinstance(row, dict):
+                continue
+            read_on = _ro_date(row.get("DATA"))
+            index = _to_float(row.get("INDEX_CITIT"))
+            if read_on is None or index is None:
+                continue
+            history.append({"date": read_on.isoformat(), "index": index, "type": row.get("TIP_CITIRE")})
+        history.sort(key=lambda h: h["date"])
         return {
             "date": r.get("DATA"),
             "type": r.get("TIP_CITIRE"),
             "meter_serial": r.get("SERIA"),
+            "history": history,
         }
 
 
@@ -265,7 +302,19 @@ class ApavitalMonthlyConsumptionSensor(_PlaceBase):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         m = self._latest_monthly()
-        return {"month": m.get("LUNA"), "year": m.get("AN")}
+        # Every billed month the API returns, as {"YYYY-MM": m³}, for charts that
+        # compare a month with the same month of the previous year.
+        history: dict[str, float] = {}
+        for row in self._place().get("monthly") or []:
+            if not isinstance(row, dict):
+                continue
+            try:
+                key = f"{int(row.get('AN')):04d}-{int(row.get('LUNA')):02d}"
+            except (TypeError, ValueError):
+                continue
+            if (volume := _to_float(row.get("CONSUM"))) is not None:
+                history[key] = round(history.get(key, 0.0) + volume, 3)
+        return {"month": m.get("LUNA"), "year": m.get("AN"), "history": dict(sorted(history.items()))}
 
 
 class _AccountBase(CoordinatorEntity[ApavitalDataCoordinator], SensorEntity):
@@ -330,4 +379,93 @@ class ApavitalUnpaidSensor(_AccountBase):
         return {
             "total_due": round(total, 2) if found else None,
             "invoices": unpaid,
+        }
+
+
+class ApavitalInvoicesSensor(_AccountBase):
+    """Latest invoice (RON), with every invoice and per-month totals as attributes."""
+
+    _attr_translation_key = "invoices"
+    _attr_native_unit_of_measurement = CURRENCY_RON
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_icon = "mdi:file-document-multiple"
+
+    def __init__(self, coordinator: ApavitalDataCoordinator, entry_id: str) -> None:
+        super().__init__(coordinator, entry_id)
+        self._attr_unique_id = f"{entry_id}_invoices"
+
+    def _rows(self) -> list[dict[str, Any]]:
+        rows = []
+        for inv in (self.coordinator.data or {}).get("invoices") or []:
+            issued = _any_date(inv.get("DATA"))
+            amount = _extract_number(inv, _ISSUED_VALUE_KEYS)
+            if issued is None or amount is None:
+                continue
+            due = _any_date(inv.get("SCADENTA"))
+            rows.append(
+                {
+                    "number": inv.get("FACTURA"),
+                    "date": issued.isoformat(),
+                    "due": due.isoformat() if due else None,
+                    "amount": amount,
+                }
+            )
+        return sorted(rows, key=lambda r: r["date"], reverse=True)
+
+    @property
+    def native_value(self) -> float | None:
+        rows = self._rows()
+        return rows[0]["amount"] if rows else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        rows = self._rows()
+        return {
+            "last_invoice_date": rows[0]["date"] if rows else None,
+            "invoices": rows,
+            "monthly_totals": _monthly_totals(rows),
+        }
+
+
+class ApavitalPaymentsSensor(_AccountBase):
+    """Latest payment (RON), with every payment and per-month totals as attributes."""
+
+    _attr_translation_key = "payments"
+    _attr_native_unit_of_measurement = CURRENCY_RON
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_icon = "mdi:cash-check"
+
+    def __init__(self, coordinator: ApavitalDataCoordinator, entry_id: str) -> None:
+        super().__init__(coordinator, entry_id)
+        self._attr_unique_id = f"{entry_id}_payments"
+
+    def _rows(self) -> list[dict[str, Any]]:
+        rows = []
+        for pay in (self.coordinator.data or {}).get("payments") or []:
+            paid_on = _any_date(pay.get("DATA"))
+            amount = _extract_number(pay, _PAID_VALUE_KEYS)
+            if paid_on is None or amount is None:
+                continue
+            rows.append(
+                {
+                    "date": paid_on.isoformat(),
+                    "amount": amount,
+                    "type": pay.get("NOTE"),
+                    "document": pay.get("INCASARE"),
+                }
+            )
+        return sorted(rows, key=lambda r: r["date"], reverse=True)
+
+    @property
+    def native_value(self) -> float | None:
+        rows = self._rows()
+        return rows[0]["amount"] if rows else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        rows = self._rows()
+        return {
+            "last_payment_date": rows[0]["date"] if rows else None,
+            "payments": rows,
+            "monthly_totals": _monthly_totals(rows),
         }

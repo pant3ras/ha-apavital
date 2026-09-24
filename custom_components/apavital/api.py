@@ -113,6 +113,20 @@ class ApavitalApiClient:
         """Monthly consumption per meter (wrapped as {"data": [...]})."""
         return await self._get("index_history", "/istoric_citiri", "Istoric Citiri")
 
+    async def async_get_contracts(self) -> list[dict[str, Any]]:
+        """Contracts on the account (COD_CLIENT + the consumption-place ID)."""
+        return await self._get("asocieri", "/evidenta_facturi", "Facturi") or []
+
+    async def async_get_invoices(self, contract: str, place_id: Any) -> Any:
+        """Every invoice of a contract, paid or not (FACTURA / DATA / SCADENTA / VALOARE)."""
+        payload = {"contract": contract, "loc_con_id": place_id, **_ctx("/evidenta_facturi", "Facturi")}
+        return await self._post_json("facturi", payload)
+
+    async def async_get_payments(self, contract: str, place_id: Any) -> Any:
+        """Every payment made on a contract (DATA / TOTAL / NOTE / INCASARE)."""
+        payload = {"contract": contract, "loc_con_id": place_id, **_ctx("/evidenta_plati", "Evidență Plăți")}
+        return await self._post_json("payments", payload)
+
     async def async_get_usage(self, client_code: str) -> list[dict[str, Any]]:
         data = await self._post_form("get_usage", {"clientCode": client_code, "ctrAdmin": "false"})
         if isinstance(data, dict):

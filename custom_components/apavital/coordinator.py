@@ -13,23 +13,33 @@ One poll assembles, for every consumption place on the account:
       },
       "balance": <raw sold response>,
       "unpaid": [...],          # facturi_unpaid
+      "invoices": [...],        # facturi, every contract (best effort)
+      "payments": [...],        # payments, every contract (best effort)
     }
+
+Invoice and payment history change at most a few times a month, so they are
+refreshed every HISTORY_INTERVAL rather than on every hourly poll, and a failure
+there keeps the previous copy instead of failing the whole update.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import ApavitalApiClient, ApavitalAuthError, ApavitalError
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
+HISTORY_INTERVAL = timedelta(hours=6)
 
 
 class ApavitalDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -41,6 +51,8 @@ class ApavitalDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=DEFAULT_SCAN_INTERVAL)
         self.entry = entry
         self.client = client
+        self._history: dict[str, list[Any]] | None = None
+        self._history_at: datetime | None = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
@@ -83,7 +95,42 @@ class ApavitalDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "monthly": monthly,
             }
 
-        return {"places": places, "balance": balance, "unpaid": unpaid}
+        history = await self._async_history()
+        return {"places": places, "balance": balance, "unpaid": unpaid, **history}
+
+    async def _async_history(self) -> dict[str, list[Any]]:
+        """Invoice and payment history for every contract — best effort."""
+        now = dt_util.utcnow()
+        if self._history is not None and self._history_at and now - self._history_at < HISTORY_INTERVAL:
+            return self._history
+        invoices: list[Any] = []
+        payments: list[Any] = []
+        try:
+            for contract in _as_list(await self.client.async_get_contracts()):
+                if not isinstance(contract, dict):
+                    continue
+                code = contract.get("COD_CLIENT")
+                place_id = contract.get("ID")
+                if not code or place_id is None:
+                    continue
+                tag = {"_contract": str(code)}
+                invoices += [
+                    {**row, **tag}
+                    for row in _as_list(await self.client.async_get_invoices(code, place_id))
+                    if isinstance(row, dict)
+                ]
+                payments += [
+                    {**row, **tag}
+                    for row in _as_list(await self.client.async_get_payments(code, place_id))
+                    if isinstance(row, dict)
+                ]
+        except ApavitalError as err:
+            _LOGGER.debug("Apavital invoice/payment history unavailable: %s", err)
+            if self._history is not None:
+                return self._history
+        self._history = {"invoices": invoices, "payments": payments}
+        self._history_at = now
+        return self._history
 
 
 def _as_list(value: Any) -> list[Any]:

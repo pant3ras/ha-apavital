@@ -18,11 +18,21 @@ balance, and unpaid invoices — for every consumption place on your account.
   the latest official reading.
 - **Last official reading** (m³) — with date, reading type, and meter serial.
 - **Last reading date**.
-- **Last month consumption** (m³) — most recent billed monthly volume.
+- **Last month consumption** (m³) — most recent billed monthly volume; every billed
+  month is in the `history` attribute as `{"YYYY-MM": m³}`.
+- The **Last official reading** sensor also carries the readings of the last year in
+  its `history` attribute.
 
 **Account** (one device):
 - **Balance** (RON).
 - **Unpaid invoices** — count, with total due and the invoice list as attributes.
+- **Invoices** (RON) — the latest invoice; every invoice (paid or not) in `invoices`
+  and per-month sums in `monthly_totals` (`{"YYYY-MM": lei}`).
+- **Payments** (RON) — the latest payment; every payment in `payments` and per-month
+  sums in `monthly_totals`.
+
+Invoice and payment history is refreshed every 6 hours; if Apavital's portal does
+not answer, the last copy is kept and the other sensors carry on.
 
 ## Authentication — sign in inside Home Assistant
 
